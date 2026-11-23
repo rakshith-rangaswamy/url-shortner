@@ -24,6 +24,14 @@ public class RedisConfig {
     @JsonProperty
     private int maxTotalConnections = 64;
 
+    /**
+     * Longest a request waits for a free pooled connection. Without it Jedis waits forever when the pool is
+     * exhausted, which would stall redirects instead of letting them fall back to MySQL.
+     */
+    @Min(1)
+    @JsonProperty
+    private int maxWaitMillis = 20;
+
     /** Cache TTL used when a short URL has no expiry of its own. */
     @Min(1)
     @JsonProperty
@@ -33,5 +41,6 @@ public class RedisConfig {
     public int getPort() { return port; }
     public int getTimeoutMillis() { return timeoutMillis; }
     public int getMaxTotalConnections() { return maxTotalConnections; }
+    public int getMaxWaitMillis() { return maxWaitMillis; }
     public long getDefaultTtlSeconds() { return defaultTtlSeconds; }
 }

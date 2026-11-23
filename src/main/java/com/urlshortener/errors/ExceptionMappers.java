@@ -3,22 +3,26 @@ package com.urlshortener.errors;
 import com.urlshortener.api.ErrorResponse;
 import com.urlshortener.service.AliasTakenException;
 import com.urlshortener.service.NotImplementedYetException;
+import com.urlshortener.service.ReservedAliasException;
 import com.urlshortener.service.ShortUrlExpiredException;
 import com.urlshortener.service.ShortUrlNotFoundException;
+import io.dropwizard.jersey.validation.ConstraintMessage;
+import io.dropwizard.jersey.validation.JerseyViolationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.ExceptionMapper;
 
 import java.util.List;
 
-/** Maps service exceptions to the HTTP contract (404, 409, 410, 501). */
+/** Maps service exceptions to the HTTP contract (404, 409, 410, 422, 501). */
 public final class ExceptionMappers {
 
     private ExceptionMappers() {
     }
 
     public static List<Object> all() {
-        return List.of(new NotImplemented(), new AliasTaken(), new Expired(), new NotFound());
+        return List.of(new NotImplemented(), new AliasTaken(), new Expired(), new NotFound(),
+                new Reserved(), new Validation());
     }
 
     private static Response json(int status, ErrorResponse body) {
@@ -35,7 +39,7 @@ public final class ExceptionMappers {
     public static class AliasTaken implements ExceptionMapper<AliasTakenException> {
         @Override
         public Response toResponse(AliasTakenException e) {
-            return json(409, new ErrorResponse(409, e.getMessage(), e.suggestions()));
+            return json(409, ErrorResponse.withSuggestions(409, e.getMessage(), e.suggestions()));
         }
     }
 
@@ -43,6 +47,25 @@ public final class ExceptionMappers {
         @Override
         public Response toResponse(ShortUrlExpiredException e) {
             return json(410, new ErrorResponse(410, e.getMessage()));
+        }
+    }
+
+    public static class Reserved implements ExceptionMapper<ReservedAliasException> {
+        @Override
+        public Response toResponse(ReservedAliasException e) {
+            return json(422, ErrorResponse.withDetails(422, "Invalid request", List.of("customAlias " + e.getMessage())));
+        }
+    }
+
+    /** Replaces Dropwizard's default {"errors":[...]} body so 422s use the same ErrorResponse shape. */
+    public static class Validation implements ExceptionMapper<JerseyViolationException> {
+        @Override
+        public Response toResponse(JerseyViolationException e) {
+            List<String> details = e.getConstraintViolations().stream()
+                    .map(v -> ConstraintMessage.getMessage(v, e.getInvocable()))
+                    .sorted()
+                    .toList();
+            return json(422, ErrorResponse.withDetails(422, "Invalid request", details));
         }
     }
 

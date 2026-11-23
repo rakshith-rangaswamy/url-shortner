@@ -10,6 +10,7 @@ import com.urlshortener.errors.ExceptionMappers;
 import com.urlshortener.health.RedisHealthCheck;
 import com.urlshortener.resources.RedirectResource;
 import com.urlshortener.resources.UrlResource;
+import com.urlshortener.service.AliasPolicy;
 import com.urlshortener.service.AliasSuggester;
 import com.urlshortener.service.ShortCodeGenerator;
 import com.urlshortener.service.UrlShortenerService;
@@ -30,7 +31,8 @@ import java.util.Set;
 /** Entry point: {@code java -jar url-shortener.jar server config.yml}. */
 public class UrlShortenerApplication extends Application<UrlShortenerConfiguration> {
 
-    static final String SWAGGER_UI_VERSION = "5.35.1";
+    /** Swagger UI webjar version, filled in from pom.xml at build time (build-info.properties). */
+    static final String SWAGGER_UI_VERSION = BuildInfo.swaggerUiVersion();
 
     public static void main(String[] args) throws Exception {
         new UrlShortenerApplication().run(args);
@@ -71,6 +73,7 @@ public class UrlShortenerApplication extends Application<UrlShortenerConfigurati
                 new RedisUrlCache(redis),
                 new ShortCodeGenerator(shortener),
                 new AliasSuggester(shortener.getAliasSuggestionCount()),
+                new AliasPolicy(shortener.getReservedAliases()),
                 ClickTracker.NO_OP);
 
         // HTTP API

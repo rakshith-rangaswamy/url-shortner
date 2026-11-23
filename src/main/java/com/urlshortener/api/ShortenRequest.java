@@ -1,5 +1,6 @@
 package com.urlshortener.api;
 
+import com.urlshortener.validation.HttpUrl;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -15,14 +16,16 @@ import jakarta.validation.constraints.Size;
 @Schema(description = "Request to shorten a long URL")
 public record ShortenRequest(
 
-        @Schema(description = "The original URL to shorten", example = "https://example.com/some/very/long/path?x=1",
+        @Schema(description = "The original URL to shorten (http or https only)", example = "https://example.com/some/very/long/path?x=1",
                 requiredMode = Schema.RequiredMode.REQUIRED)
         @NotBlank
         @Size(max = 2048)
+        @HttpUrl
         String longUrl,
 
-        @Schema(description = "Optional custom short code (Base62, no special characters)", example = "myLink1")
-        @Pattern(regexp = "^[A-Za-z0-9]{1,7}$", message = "must be 1-7 letters or digits")
+        @Schema(description = "Optional custom short code (Base62, no special characters). "
+                + "Reserved words such as 'docs' or 'api' are rejected.", example = "myLink1")
+        @Pattern(regexp = ShortCodes.PATTERN, message = "must be 1-" + ShortCodes.MAX_LENGTH + " letters or digits")
         String customAlias,
 
         @Schema(description = "Optional lifetime of the short URL in seconds. Omit for no expiry.", example = "604800")

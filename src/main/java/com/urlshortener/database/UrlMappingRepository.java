@@ -20,16 +20,21 @@ public interface UrlMappingRepository {
     @SqlQuery("SELECT * FROM url_mapping WHERE short_code = :shortCode")
     Optional<UrlMapping> findByShortCode(@Bind("shortCode") String shortCode);
 
-    /** Lookup used to return the existing short URL when the same user shortens the same URL again. */
+    /**
+     * Lookup used to return the existing short URL when the same long URL is shortened again, by any user.
+     * Matches the hash for the index, then the full URL so a hash collision can never return the wrong link.
+     * Oldest row first, so concurrent duplicates converge on one code.
+     */
     @SqlQuery("""
             SELECT * FROM url_mapping
             WHERE long_url_hash = :longUrlHash
-              AND ((:userId IS NULL AND user_id IS NULL) OR user_id = :userId)
+              AND long_url = :longUrl
               AND is_custom = FALSE
               AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP(3))
+            ORDER BY id
             LIMIT 1
             """)
-    Optional<UrlMapping> findActiveByLongUrlHash(@Bind("longUrlHash") String longUrlHash, @Bind("userId") String userId);
+    Optional<UrlMapping> findActiveByLongUrl(@Bind("longUrlHash") String longUrlHash, @Bind("longUrl") String longUrl);
 
     @SqlQuery("SELECT COUNT(*) > 0 FROM url_mapping WHERE short_code = :shortCode")
     boolean existsByShortCode(@Bind("shortCode") String shortCode);

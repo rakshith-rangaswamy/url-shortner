@@ -4,6 +4,7 @@ import com.codahale.metrics.annotation.Timed;
 import com.urlshortener.api.ErrorResponse;
 import com.urlshortener.api.ShortenRequest;
 import com.urlshortener.api.ShortenResponse;
+import com.urlshortener.service.ShortenResult;
 import com.urlshortener.service.UrlShortenerService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -37,19 +38,25 @@ public class UrlResource {
     @POST
     @Timed(name = "shorten")
     @Operation(summary = "Shorten a URL",
-            description = "Creates a short URL, or returns the existing one if the same user already shortened "
-                    + "this URL and it has not expired. Optional custom alias and TTL.",
+            description = "Creates a short URL (201), or returns the existing one (200) if this URL was already "
+                    + "shortened and has not expired. Optional custom alias and TTL.",
             responses = {
-                    @ApiResponse(responseCode = "201", description = "Short URL created",
+                    @ApiResponse(responseCode = "200", description = "Existing, unexpired short URL reused",
+                            content = @Content(schema = @Schema(implementation = ShortenResponse.class))),
+                    @ApiResponse(responseCode = "201", description = "New short URL created; Location header points at it",
                             content = @Content(schema = @Schema(implementation = ShortenResponse.class))),
                     @ApiResponse(responseCode = "409", description = "Custom alias already taken; suggestions included",
                             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-                    @ApiResponse(responseCode = "422", description = "Invalid request body"),
+                    @ApiResponse(responseCode = "422", description = "Invalid request body or reserved alias",
+                            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
                     @ApiResponse(responseCode = "501", description = "Not implemented yet (scaffold)",
                             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
             })
     public Response shorten(@NotNull @Valid ShortenRequest request) {
-        ShortenResponse created = service.shorten(request);
-        return Response.created(URI.create(created.shortUrl())).entity(created).build();
+        ShortenResult result = service.shorten(request);
+        ShortenResponse body = result.response();
+        return result.created()
+                ? Response.created(URI.create(body.shortUrl())).entity(body).build()
+                : Response.ok(body).build();
     }
 }

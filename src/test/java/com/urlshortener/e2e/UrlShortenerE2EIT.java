@@ -3,6 +3,7 @@ package com.urlshortener.e2e;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.urlshortener.UrlShortenerApplication;
 import com.urlshortener.UrlShortenerConfiguration;
+import com.urlshortener.api.ShortCodes;
 import com.urlshortener.support.Infrastructure;
 import io.dropwizard.testing.ConfigOverride;
 import io.dropwizard.testing.ResourceHelpers;
@@ -80,6 +81,18 @@ class UrlShortenerE2EIT {
         }
 
         @Test
+        void shortCodeColumnLengthMatchesShortCodesMaxLength() {
+            Jdbi jdbi = Jdbi.create(Infrastructure.MYSQL.getJdbcUrl(),
+                    Infrastructure.MYSQL.getUsername(), Infrastructure.MYSQL.getPassword());
+            int length = jdbi.withHandle(h -> h.createQuery(
+                            "SELECT CHARACTER_MAXIMUM_LENGTH FROM information_schema.columns "
+                                    + "WHERE table_schema = DATABASE() AND table_name = 'url_mapping' "
+                                    + "AND column_name = 'short_code'")
+                    .mapTo(Integer.class).one());
+            assertThat(length).isEqualTo(ShortCodes.MAX_LENGTH);
+        }
+
+        @Test
         void healthChecksReportMysqlAndRedisHealthy() {
             JsonNode health = client().target(admin("/healthcheck")).request().get(JsonNode.class);
             assertThat(health.path("mysql").path("healthy").asBoolean()).isTrue();
@@ -94,6 +107,16 @@ class UrlShortenerE2EIT {
         }
 
         @Test
+        void openApiDocumentsBoth200And201ForPost() {
+            JsonNode responses = client().target(app("/openapi.json")).request().get(JsonNode.class)
+                    .path("paths").path("/api/v1/urls").path("post").path("responses");
+            assertThat(responses.has("200")).isTrue();
+            assertThat(responses.has("201")).isTrue();
+            assertThat(responses.has("409")).isTrue();
+            assertThat(responses.has("422")).isTrue();
+        }
+
+        @Test
         void swaggerUiIsServed() {
             try (Response response = client().target(app("/docs/")).request().get()) {
                 assertThat(response.getStatus()).isEqualTo(200);
@@ -102,9 +125,32 @@ class UrlShortenerE2EIT {
         }
 
         @Test
-        void postRejectsInvalidBody() {
+        void postRejectsInvalidBodyWithErrorResponseShape() {
             try (Response response = post(Map.of("customAlias", "bad-alias!"))) {
                 assertThat(response.getStatus()).isEqualTo(422);
+                JsonNode body = response.readEntity(JsonNode.class);
+                assertThat(body.path("code").asInt()).isEqualTo(422);
+                assertThat(body.path("message").asText()).isEqualTo("Invalid request");
+                assertThat(body.path("details").toString()).contains("longUrl").contains("customAlias");
+            }
+        }
+
+        @Test
+        void postRejectsNonHttpUrls() {
+            for (String url : new String[]{"javascript:alert(1)", "ftp://example.com/x", "example.com"}) {
+                try (Response response = post(Map.of("longUrl", url))) {
+                    assertThat(response.getStatus()).as(url).isEqualTo(422);
+                }
+            }
+        }
+
+        @Test
+        void postRejectsReservedAlias() {
+            for (String alias : new String[]{"docs", "Docs", "api", "health"}) {
+                try (Response response = post(Map.of("longUrl", "https://example.com/r", "customAlias", alias))) {
+                    assertThat(response.getStatus()).as(alias).isEqualTo(422);
+                    assertThat(response.readEntity(JsonNode.class).path("details").toString()).contains("reserved");
+                }
             }
         }
 
@@ -149,11 +195,26 @@ class UrlShortenerE2EIT {
         }
 
         @Test
-        void sameUrlForSameUserReturnsExistingShortCode() {
-            Map<String, Object> body = Map.of("longUrl", "https://example.com/same", "userId", "user-1");
-            String first = post(body).readEntity(JsonNode.class).path("shortCode").asText();
-            String second = post(body).readEntity(JsonNode.class).path("shortCode").asText();
-            assertThat(second).isEqualTo(first);
+        void sameUrlReturnsExistingShortCodeWith200() {
+            Map<String, Object> body = Map.of("longUrl", "https://example.com/same");
+            String first;
+            try (Response created = post(body)) {
+                assertThat(created.getStatus()).isEqualTo(201);
+                first = created.readEntity(JsonNode.class).path("shortCode").asText();
+            }
+            try (Response reused = post(body)) {
+                assertThat(reused.getStatus()).isEqualTo(200);
+                assertThat(reused.readEntity(JsonNode.class).path("shortCode").asText()).isEqualTo(first);
+            }
+        }
+
+        @Test
+        void sameUrlFromDifferentUsersReturnsSameShortCode() {
+            String a = post(Map.of("longUrl", "https://example.com/shared", "userId", "user-a"))
+                    .readEntity(JsonNode.class).path("shortCode").asText();
+            String b = post(Map.of("longUrl", "https://example.com/shared", "userId", "user-b"))
+                    .readEntity(JsonNode.class).path("shortCode").asText();
+            assertThat(b).isEqualTo(a);
         }
 
         @Test

@@ -2,6 +2,7 @@ package com.urlshortener.resources;
 
 import com.codahale.metrics.annotation.Timed;
 import com.urlshortener.api.ErrorResponse;
+import com.urlshortener.api.ShortCodes;
 import com.urlshortener.service.UrlShortenerService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -30,7 +31,7 @@ public class RedirectResource {
     }
 
     @GET
-    @Path("{shortCode: [A-Za-z0-9]{1,7}}")
+    @Path("{shortCode: " + ShortCodes.PATTERN + "}")
     @Timed(name = "redirect")
     @Operation(summary = "Redirect to the original URL",
             description = "Responds with 302 so every click reaches the service (for click counting and cache warmth).",
