@@ -1,0 +1,42 @@
+# Dropwizard configuration. Values in ${...} can be overridden by environment variables.
+server:
+  applicationConnectors:
+    - type: http
+      port: ${PORT:-8080}
+  adminConnectors:
+    - type: http
+      port: ${ADMIN_PORT:-8081}
+
+# MySQL connection pool (database/ package)
+database:
+  driverClass: com.mysql.cj.jdbc.Driver
+  url: ${DB_URL:-jdbc:mysql://localhost:3306/urlshortener}
+  user: ${DB_USER:-urlshortener}
+  password: ${DB_PASSWORD:-urlshortener}
+  minSize: 4
+  maxSize: 32
+  validationQuery: "SELECT 1"
+  checkConnectionWhileIdle: true
+
+# Redis cache in front of the redirect path (cache/ package)
+redis:
+  host: ${REDIS_HOST:-localhost}
+  port: ${REDIS_PORT:-6379}
+  timeoutMillis: 50          # keeps a slow cache from breaking the 200ms redirect budget
+  maxTotalConnections: 64
+  maxWaitMillis: 20         # max wait for a pooled connection; then fall back to MySQL
+  defaultTtlSeconds: 86400   # cache entry lifetime when the short URL has no expiry
+
+# Short-code rules (service/ package)
+shortener:
+  baseUrl: ${BASE_URL:-http://localhost:8080}
+  hashAlgorithm: SHA-256     # SHA-256 or MD5 (OPEN QUESTION which one)
+  codeLength: 7              # Base62; max 7 (DB column and route allow 7)
+  maxRehashAttempts: 5       # then fall back to salt/counter
+  aliasSuggestionCount: 3    # returned with 409 when a custom alias is taken
+  reservedAliases: [docs, swagger, openapi, api, admin, health, metrics, static, assets]
+
+logging:
+  level: INFO
+  loggers:
+    com.urlshortener: DEBUG
