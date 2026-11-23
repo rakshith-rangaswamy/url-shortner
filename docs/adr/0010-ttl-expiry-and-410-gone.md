@@ -1,7 +1,7 @@
 # ADR-0010: Expiry is given as a TTL; expired links return 410 Gone
 
-- **Status:** Accepted (TTL format Proposed)
-- **Date:** 2026-11-22
+- **Status:** Accepted
+- **Date:** 2026-11-22 (TTL format decided 2026-11-23)
 - **Deciders:** Rakshith
 
 ## Context
@@ -12,7 +12,7 @@ Users may want links that stop working after a while. Clients need to tell "neve
 
 Accept an optional TTL on create and store an absolute `expires_at` (`now + TTL`); no TTL means the link never expires. After expiry, `GET` returns **410 Gone** (unknown codes return 404) and the entry is not cached.
 
-**Open:** TTL format. Default is `ttlSeconds` (a positive integer); the alternative is an ISO-8601 duration such as `P7D`. No default or maximum TTL yet.
+**TTL format: `ttlSeconds`**, a whole number of seconds from **60** to **315,360,000** (10 years), decided 2026-11-23. There is no default: omitting it means the link never expires. A number is the simplest for clients and matches Redis TTLs; the limits catch typos and absurd dates. Out-of-range values get 422. `expiresAt` is returned as an ISO-8601 timestamp.
 
 ## Consequences
 

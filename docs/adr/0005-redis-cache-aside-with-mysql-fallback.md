@@ -23,4 +23,4 @@ Redis calls are bounded: 50 ms socket timeout and 20 ms pool max wait (`redis.ti
 
 - A cached entry can never outlive its short URL, so cache hits need no expiry check.
 - With Redis down, redirects still work from MySQL (covered by `RedisDownE2EIT`).
-- The flow is documented in the stubs; implementation is pending (see ADR-0017).
+- Implemented in `UrlShortenerService.resolve` and `RedisUrlCache`; cache hits, misses and errors are counted in Dropwizard Metrics.

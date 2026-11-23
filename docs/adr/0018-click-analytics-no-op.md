@@ -1,6 +1,6 @@
-# ADR-0018: Click analytics: no-op tracker for now
+# ADR-0018: Click analytics are out of scope for now (no-op tracker)
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-23)
 - **Date:** 2026-11-22
 - **Deciders:** Rakshith
 
@@ -10,9 +10,9 @@
 
 ## Decision
 
-Define a `ClickTracker` interface called on each redirect, wired with a **no-op** implementation.
+**Click counting is out of scope for this phase.** Nothing in the spec reads click counts, and counting without a way to see them adds load for no value. A `ClickTracker` interface is called on each redirect and wired with a **no-op** implementation, so counting can be added later without touching the redirect code.
 
 ## Consequences
 
 - Adding counting later means a real `ClickTracker` (for example Redis `INCR` or an async queue) without touching the redirect code.
-- Decide scope and storage in a follow-up ADR.
+- Scope and storage get their own ADR when counting is needed.

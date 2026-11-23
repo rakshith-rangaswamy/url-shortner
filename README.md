@@ -1,61 +1,74 @@
 # URL Shortener
 
-A Bitly-style URL shortener built on **Dropwizard 5** (Java 21, Maven), with **MySQL** for storage and **Redis** as a cache in front of the redirect path.
+A Bitly-style URL shortener built on **Dropwizard 5** (Java 21, Maven), with **MySQL** as the source of truth and **Redis** as a cache in front of the redirect path.
 
-> **Status: scaffold.** Every layer is wired end to end (HTTP API, service, cache, database, Swagger, health checks, integration tests), but the business logic is not written yet. `POST /api/v1/urls` and `GET /{shortCode}` currently answer **501 Not Implemented**.
+## Functionality
 
-## Functionality (target)
-
-1. Convert a long URL (http or https only) into a short URL, optionally tagged with a user id. Shortening the same URL again, by any user, returns the existing short URL while it has not expired.
-2. Optional custom alias (1 to 7 letters or digits). Reserved words such as `docs`, `api` or `health` are rejected with `422`. If the alias is taken, respond `409 Conflict` with up to 3 suggested alternatives.
-3. Optional expiry (TTL). After expiry the short URL stops redirecting and returns `410 Gone`.
-4. `GET` on a short URL redirects (`302 Found`) to the original URL.
-
-## Non-functional goals
-
-| Goal | How the design addresses it | Where |
-|---|---|---|
-| Redirect within 200ms | Redis read-through cache on `GET`; 50ms Redis socket timeout and 20ms pool max wait so a slow or exhausted cache falls back to MySQL; timers on every endpoint | `cache/`, `config.yml`, `@Timed` in `resources/` |
-| High availability | Stateless app instances; MySQL and Redis health checks; pooled connections | `health/`, `database/DatabaseModule`, admin `/healthcheck` |
-| Eventual consistency | Cache entries expire with the short URL's remaining lifetime; DB read replicas can be added later | `cache/RedisUrlCache` |
-| Uniqueness | Hash of the long URL to Base62 (7 chars); re-hash up to 5 times on collision, then salt/counter; `UNIQUE` index on `short_code`; reuse lookup also compares the full URL so a hash collision never returns the wrong link | `service/ShortCodeGenerator`, `database/UrlMappingRepository`, `V1__create_url_mapping.sql` |
-| Click analytics | 302 (not 301) so every click reaches the service; `ClickTracker` is a no-op for now | `analytics/` |
+1. **Shorten** an http or https URL into a 7-character Base62 code, optionally tagged with a `userId`. Shortening the same URL again, by any user, returns the existing short URL (`200`) while it has not expired; otherwise a new one is created (`201`).
+2. **Custom alias** (optional): 3 to 7 letters or digits. Reserved words such as `docs`, `api` or `health` are rejected (`422`). A taken alias returns `409 Conflict` with up to 3 free suggestions.
+3. **Expiry** (optional): `ttlSeconds` from 60 seconds to 10 years. After expiry the short URL returns `410 Gone`. Expired codes are never handed out again.
+4. **Redirect**: `GET /{shortCode}` answers `302 Found` with the original URL.
 
 ## API
 
 | Method | Path | Success | Errors |
 |---|---|---|---|
-| `POST` | `/api/v1/urls` | `201` new short URL, `200` existing one reused | `422` invalid body or reserved alias (with `details`), `409` alias taken (with `suggestions`) |
+| `POST` | `/api/v1/urls` | `201` new short URL (with `Location`), `200` existing one reused | `422` invalid body or reserved alias, `409` alias taken (with `suggestions`), `503` no free code (practically unreachable) |
 | `GET` | `/{shortCode}` | `302`, `Location` = original URL | `404` unknown, `410` expired |
 
-Request body for `POST /api/v1/urls`:
-
-```json
-{
-  "longUrl": "https://example.com/some/very/long/path",
-  "customAlias": "myLink1",
-  "ttlSeconds": 604800,
-  "userId": "user-42"
-}
+```bash
+curl -i -X POST localhost:8080/api/v1/urls -H 'Content-Type: application/json' \
+  -d '{"longUrl": "https://example.com/some/very/long/path", "customAlias": "promo", "ttlSeconds": 604800, "userId": "user-42"}'
 ```
 
-Only `longUrl` is required. Response:
+Only `longUrl` is required. Response (`expiresAt` is omitted when the link never expires):
 
 ```json
 {
-  "shortCode": "myLink1",
-  "shortUrl": "http://localhost:8080/myLink1",
+  "shortCode": "promo",
+  "shortUrl": "http://localhost:8080/promo",
   "longUrl": "https://example.com/some/very/long/path",
   "expiresAt": "2026-11-30T00:00:00Z",
   "userId": "user-42"
 }
 ```
 
-All errors share one shape: `{"code": 409, "message": "...", "suggestions": [...]}` or `{"code": 422, "message": "Invalid request", "details": ["longUrl must be an absolute http or https URL"]}`.
+A taken alias:
 
-**Short-code length** is defined once in `api/ShortCodes.MAX_LENGTH` (7). The request pattern, the redirect route and the `codeLength` config limit all use it, and a test checks it against the `short_code` column.
+```json
+{ "code": 409, "message": "Custom alias 'promo' is already taken", "suggestions": ["promo1", "promo2", "promo3"] }
+```
+
+All errors share this shape; validation errors carry `details`, one entry per invalid field.
+
+When an existing short URL is reused, the new request's `ttlSeconds` and `userId` are ignored and the stored values are returned.
 
 **Swagger UI:** http://localhost:8080/docs/ · **OpenAPI spec:** http://localhost:8080/openapi.json
+
+## How it works
+
+**Short codes** (ADR-0006, ADR-0007). The code is SHA-256 of the URL, reduced to 7 Base62 characters (62^7 is about 3.5 trillion codes). On a collision with a different URL the hash is re-hashed up to 5 times, then a counter is appended (`url#1`, `url#2`, ...). Up to 20 candidates are tried.
+
+**Uniqueness** (ADR-0019). The `UNIQUE` index on `short_code` is the check: the service inserts the row, and a duplicate-key error means the code is taken. Two concurrent requests for the same new URL converge on one code.
+
+**Redirect read path** (ADR-0005), cache-aside with MySQL as the source of truth:
+
+1. Look up `url:{shortCode}` in Redis. A hit redirects immediately.
+2. On a miss, or if Redis errors or times out, read the row from MySQL.
+3. No row: `404`. Expired row: `410`, and nothing is cached.
+4. Valid row: write it to Redis with TTL = min(remaining lifetime, `redis.defaultTtlSeconds`), so a cached entry can never outlive its short URL. Then redirect.
+
+New short URLs are written to Redis as soon as they are created.
+
+## Non-functional goals
+
+| Goal | How | Where |
+|---|---|---|
+| Redirect within 200ms | Redis cache-aside on `GET`; 50ms Redis socket timeout and 20ms pool max wait so a slow cache falls back to MySQL; request timers and cache hit/miss/error meters | `cache/`, `config.yml`, admin `/metrics` |
+| High availability | Stateless app instances; MySQL and Redis health checks; the app keeps serving from MySQL when Redis is down | `health/`, admin `/healthcheck` |
+| Eventual consistency | Cache entries expire with the short URL; reuse lookups read MySQL | `cache/RedisUrlCache`, `service/` |
+| Uniqueness | Hash + Base62, re-hash then salt, unique index as the final check | `service/ShortCodeGenerator`, `V1__create_url_mapping.sql` |
+| Click analytics | `302` so every click reaches the service; counting itself is out of scope (`ClickTracker` is a no-op) | `analytics/` |
 
 ## Project layout
 
@@ -64,22 +77,24 @@ src/main/java/com/urlshortener/
   UrlShortenerApplication.java    wires everything together
   UrlShortenerConfiguration.java  root config (bound from config.yml)
   config/      RedisConfig, ShortenerConfig
-  api/         request/response DTOs
+  api/         request/response DTOs, ShortCodes (length and patterns)
   resources/   UrlResource (POST), RedirectResource (GET)
-  service/     conversion: UrlShortenerService, ShortCodeGenerator, Base62, AliasSuggester, exceptions
-  database/    DatabaseModule (connection pool + Flyway), UrlMappingRepository (JDBI), UrlMapping
+  service/     UrlShortenerService, ShortCodeGenerator, Base62, AliasSuggester, AliasPolicy, exceptions
+  database/    DatabaseModule (pool + Flyway), UrlMappingRepository (JDBI), UrlMapping, DuplicateKeys
   cache/       UrlCache, RedisUrlCache, RedisClient
   analytics/   ClickTracker
   health/      RedisHealthCheck (MySQL health check is built in)
-  errors/      exception mappers for 404 / 409 / 410 / 422 / 501
+  errors/      exception mappers for 404 / 409 / 410 / 422 / 503
   validation/  @HttpUrl (http/https only)
 src/main/resources/
   db/migration/V1__create_url_mapping.sql
   swagger/index.html
 src/test/java/com/urlshortener/
+  service/, config/, validation/  unit tests
   e2e/UrlShortenerE2EIT.java      end-to-end tests over HTTP
-  e2e/RedisDownE2EIT.java         app behaviour with Redis unavailable
+  e2e/RedisDownE2EIT.java         behaviour with Redis unavailable
   support/Infrastructure.java     Testcontainers MySQL + Redis
+docs/adr/                         architecture decision records
 ```
 
 ## Running locally
@@ -87,7 +102,7 @@ src/test/java/com/urlshortener/
 Prerequisites: Java 21, Maven 3.9+, Docker.
 
 ```bash
-docker compose up -d                         # MySQL on 3306, Redis on 6379
+docker compose up -d --wait                  # MySQL on 3306, Redis on 6379
 mvn package -DskipTests
 java -jar target/url-shortener-0.1.0-SNAPSHOT.jar server config.yml
 ```
@@ -95,47 +110,21 @@ java -jar target/url-shortener-0.1.0-SNAPSHOT.jar server config.yml
 - App: http://localhost:8080 · Swagger: http://localhost:8080/docs/
 - Admin (health, metrics): http://localhost:8081/healthcheck, http://localhost:8081/metrics
 
+On the very first `docker compose up`, MySQL restarts once while it initialises; if the app reports "Communications link failure", start it again a few seconds later.
+
 Settings can be overridden with environment variables: `PORT`, `ADMIN_PORT`, `DB_URL`, `DB_USER`, `DB_PASSWORD`, `REDIS_HOST`, `REDIS_PORT`, `BASE_URL`.
 
 ## Tests
 
 ```bash
 mvn test      # unit tests
-mvn verify    # + end-to-end integration tests (needs Docker; starts MySQL and Redis via Testcontainers)
+mvn verify    # + end-to-end tests (needs Docker; starts MySQL and Redis via Testcontainers)
 ```
 
-The end-to-end suite has two groups:
-
-- **Scaffold** (enabled): app boots, migration runs, column length matches `ShortCodes`, MySQL and Redis are healthy, OpenAPI lists both endpoints with 200/201/409/422, Swagger UI is served, invalid input, non-http URLs and reserved aliases get 422 in the `ErrorResponse` shape, both endpoints answer 501.
-- **Redis down** (`RedisDownE2EIT`): the app starts with no Redis, reports it unhealthy in under 2 seconds and keeps serving requests.
-- **Target behaviour** (disabled): 201 on create, 200 on reuse, same URL from different users gives the same code, 302 redirect, custom alias, 409 with suggestions, 410 after expiry, 404 for unknown codes, redirect under 200ms, redirect with Redis down. Enable each test as its feature is implemented.
-
-Unit tests cover URL validation, reserved aliases and config limits. `ShortCodeGeneratorTest` (Base62 and the collision policy) is disabled until that logic exists.
-
-## Redirect read path (planned, not implemented)
-
-`GET /{shortCode}` uses cache-aside, with MySQL as the source of truth:
-
-1. Look up `url:{shortCode}` in Redis. A hit redirects immediately.
-2. On a miss, or if Redis errors or times out, read the row from MySQL.
-3. No row: `404`. Expired row: `410`, and nothing is cached.
-4. Valid row: write it to Redis with TTL = min(remaining lifetime, `redis.defaultTtlSeconds`), so the next request is a hit and a cached entry can never outlive its short URL. Then redirect with `302`.
-
-Where it lives: `UrlShortenerService.resolve`, `cache/UrlCache`, `cache/RedisUrlCache`, `database/UrlMappingRepository.findByShortCode`. The Redis-down test and the disabled redirect tests describe the expected behaviour.
-
-## Known trade-offs
-
-- **Concurrent duplicates.** Two simultaneous requests for the same new URL can both insert, giving two codes for one URL. Both work; the reuse lookup returns the oldest row, so later requests converge on one code. Accepted under eventual consistency.
+- **Unit:** Base62, code generation and the collision policy, alias suggestions, reserved aliases, URL validation, config limits, and the service (create, reuse, collisions, salt fallback, races, custom aliases, 409, cache-aside redirect, 404, 410, cache TTL capping) against in-memory fakes.
+- **End-to-end:** schema and health, OpenAPI, validation errors, create (201), reuse (200, any user), TTL, custom alias, 409 with 3 usable suggestions, 302 redirect, cache refill after a miss, cache TTL capped by expiry, 410 after expiry, new code after expiry, 404, redirect under 200ms.
+- **Redis down:** the app starts without Redis, reports it unhealthy in under 2 seconds, and still shortens and redirects from MySQL within 200ms.
 
 ## Architecture decisions
 
 All decisions, with context and trade-offs, are recorded in [`docs/adr/`](docs/adr/README.md).
-
-## Design decisions still open
-
-These defaults are in place and each lives in a single config value or class:
-
-1. Hash function: **SHA-256** (alternative: MD5), `shortener.hashAlgorithm`.
-2. Custom alias length: **1 to 7** Base62 characters (alternative: exactly 7), `ShortenRequest.customAlias`.
-3. TTL format: **seconds** in `ttlSeconds` (alternative: ISO-8601 duration), no default or maximum.
-4. Click counting: **no-op** `ClickTracker` for now.
