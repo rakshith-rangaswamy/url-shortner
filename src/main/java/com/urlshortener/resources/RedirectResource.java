@@ -34,7 +34,9 @@ public class RedirectResource {
     @Path("{shortCode: " + ShortCodes.PATTERN + "}")
     @Timed(name = "redirect")
     @Operation(summary = "Redirect to the original URL",
-            description = "Responds with 302 so every click reaches the service (for click counting and cache warmth).",
+            description = "Responds with 302 so every click reaches the service (for click counting and cache warmth). "
+                    + "Looks up Redis first; on a cache miss (or if Redis is unavailable) reads MySQL and "
+                    + "refills the cache for the short URL's remaining lifetime.",
             responses = {
                     @ApiResponse(responseCode = "302", description = "Redirect to the original URL",
                             headers = @Header(name = "Location", description = "The original URL")),

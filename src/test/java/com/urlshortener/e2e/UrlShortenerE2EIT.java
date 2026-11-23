@@ -245,6 +245,16 @@ class UrlShortenerE2EIT {
         }
 
         @Test
+        void cacheMissReadsMysqlAndRefillsCache() {
+            // seed url_mapping directly, GET it: expect 302, and Redis now holds url:{code} with a TTL
+        }
+
+        @Test
+        void cacheEntryDoesNotOutliveTheShortUrl() {
+            // seed a row expiring in 30s, GET it: expect Redis PTTL for url:{code} <= 30s
+        }
+
+        @Test
         void unknownShortCodeReturns404() {
             try (Response response = get("zzzzzzz")) {
                 assertThat(response.getStatus()).isEqualTo(404);

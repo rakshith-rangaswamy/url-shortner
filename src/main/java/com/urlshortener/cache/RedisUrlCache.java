@@ -7,8 +7,9 @@ import java.util.Optional;
 
 /**
  * Redis-backed {@link UrlCache}. Planned: key "url:{shortCode}" with value longUrl and TTL equal to the
- * remaining lifetime of the short URL (or the configured default). Cache errors must degrade to a DB read,
- * never fail the redirect.
+ * remaining lifetime of the short URL, capped at redis.defaultTtlSeconds.
+ * {@link #get} returns empty on a miss and on any Redis error, so the service falls back to MySQL;
+ * {@link #put} and {@link #evict} log and swallow errors. A cache failure never fails the redirect.
  */
 public class RedisUrlCache implements UrlCache {
 

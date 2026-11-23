@@ -3,7 +3,11 @@ package com.urlshortener.cache;
 import java.time.Duration;
 import java.util.Optional;
 
-/** Read-through cache for short code to long URL lookups on the redirect path. */
+/**
+ * Cache-aside store for short code to long URL lookups on the redirect path. MySQL stays the source of
+ * truth: on a miss the service reads the database and calls {@link #put} to refill the cache.
+ * Implementations must never throw; an unavailable cache behaves as a miss.
+ */
 public interface UrlCache {
 
     Optional<String> get(String shortCode);

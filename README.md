@@ -112,6 +112,17 @@ The end-to-end suite has two groups:
 
 Unit tests cover URL validation, reserved aliases and config limits. `ShortCodeGeneratorTest` (Base62 and the collision policy) is disabled until that logic exists.
 
+## Redirect read path (planned, not implemented)
+
+`GET /{shortCode}` uses cache-aside, with MySQL as the source of truth:
+
+1. Look up `url:{shortCode}` in Redis. A hit redirects immediately.
+2. On a miss, or if Redis errors or times out, read the row from MySQL.
+3. No row: `404`. Expired row: `410`, and nothing is cached.
+4. Valid row: write it to Redis with TTL = min(remaining lifetime, `redis.defaultTtlSeconds`), so the next request is a hit and a cached entry can never outlive its short URL. Then redirect with `302`.
+
+Where it lives: `UrlShortenerService.resolve`, `cache/UrlCache`, `cache/RedisUrlCache`, `database/UrlMappingRepository.findByShortCode`. The Redis-down test and the disabled redirect tests describe the expected behaviour.
+
 ## Known trade-offs
 
 - **Concurrent duplicates.** Two simultaneous requests for the same new URL can both insert, giving two codes for one URL. Both work; the reuse lookup returns the oldest row, so later requests converge on one code. Accepted under eventual consistency.

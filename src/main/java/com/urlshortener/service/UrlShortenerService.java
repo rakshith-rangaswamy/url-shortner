@@ -55,10 +55,16 @@ public class UrlShortenerService {
     }
 
     /**
-     * Planned flow (hot path, 200ms budget):
-     *  - read {@link UrlCache}; on miss read the repository and populate the cache.
-     *  - unknown code: {@link ShortUrlNotFoundException} (404); expired: {@link ShortUrlExpiredException} (410).
-     *  - record the click via {@link ClickTracker} without blocking the response.
+     * Planned flow (hot path, 200ms budget). Cache-aside: Redis first, MySQL is the source of truth.
+     *  1. {@link UrlCache#get}: a hit returns the long URL straight away. A hit is never stale-expired,
+     *     because step 4 caps the cache TTL at the short URL's remaining lifetime.
+     *  2. Cache miss, or any Redis error (the cache reports errors as a miss): read
+     *     {@link UrlMappingRepository#findByShortCode} from MySQL.
+     *  3. No row: {@link ShortUrlNotFoundException} (404). Row expired: {@link ShortUrlExpiredException} (410),
+     *     and nothing is cached.
+     *  4. Row valid: {@link UrlCache#put} with TTL = min(remaining lifetime, redis.defaultTtlSeconds) so the next
+     *     request is a cache hit, then return the long URL.
+     *  5. Record the click via {@link ClickTracker} without blocking the response.
      */
     public URI resolve(String shortCode) {
         throw new NotImplementedYetException("UrlShortenerService.resolve");
