@@ -1,6 +1,6 @@
 # ADR-0008: Reuse the existing short URL for the same long URL, for any user
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0020 (2026-11-23)
 - **Date:** 2026-11-22
 - **Deciders:** Rakshith
 

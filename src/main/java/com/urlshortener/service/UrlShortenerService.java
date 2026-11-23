@@ -54,11 +54,13 @@ public class UrlShortenerService {
     /**
      * Creates a short URL, or returns the existing one.
      * <ul>
-     *   <li>Custom alias: reserved words are rejected (422); a taken alias, expired or not, gives
+     *   <li>Every short URL belongs to {@code request.userId()}.</li>
+     *   <li>Custom alias: globally unique; reserved words are rejected (422); a taken alias, expired or not, gives
      *       {@link AliasTakenException} (409) with suggestions.</li>
-     *   <li>No alias: an unexpired generated mapping for the same URL, by any user, is returned as is
-     *       ({@code created=false}, 200); the request's TTL and userId are ignored (ADR-0019). Otherwise code
-     *       candidates are tried in order and the first insert that succeeds wins ({@code created=true}, 201).</li>
+     *   <li>No alias: the same user's unexpired generated mapping for the same URL is returned as is
+     *       ({@code created=false}, 200; the request's TTL is ignored, ADR-0019). Other users never share it
+     *       (ADR-0020). Otherwise code candidates are tried in order and the first insert that succeeds wins
+     *       ({@code created=true}, 201).</li>
      * </ul>
      * New mappings are written to the cache straight away.
      */
@@ -67,26 +69,27 @@ public class UrlShortenerService {
         String longUrl = request.longUrl().trim();
         String hash = codeGenerator.digest(longUrl);
         Instant expiresAt = request.ttlSeconds() == null ? null : now.plusSeconds(request.ttlSeconds());
+        String userId = request.userId();
 
         if (request.customAlias() != null) {
-            return createWithAlias(request.customAlias(), longUrl, hash, request.userId(), now, expiresAt);
+            return createWithAlias(request.customAlias(), longUrl, hash, userId, now, expiresAt);
         }
 
-        Optional<UrlMapping> existing = repository.findActiveByLongUrl(hash, longUrl, now);
+        Optional<UrlMapping> existing = repository.findActiveByUserAndLongUrl(userId, hash, longUrl, now);
         if (existing.isPresent()) {
             return new ShortenResult(toResponse(existing.get()), false);
         }
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            String code = codeGenerator.candidate(longUrl, attempt);
-            UrlMapping mapping = new UrlMapping(null, code, longUrl, hash, request.userId(), false, now, expiresAt);
+            String code = codeGenerator.candidate(ShortCodeGenerator.key(userId, longUrl), attempt);
+            UrlMapping mapping = new UrlMapping(null, code, longUrl, hash, userId, false, now, expiresAt);
             if (tryInsert(mapping)) {
                 cacheMapping(mapping, now);
                 return new ShortenResult(toResponse(mapping), true);
             }
-            // Code taken. If a concurrent request just stored this same URL under it, reuse that row.
+            // Code taken. If a concurrent request by the same user just stored this URL under it, reuse that row.
             Optional<UrlMapping> holder = repository.findByShortCode(code);
-            if (holder.isPresent() && isReusable(holder.get(), longUrl, now)) {
+            if (holder.isPresent() && isReusable(holder.get(), userId, longUrl, now)) {
                 return new ShortenResult(toResponse(holder.get()), false);
             }
         }
@@ -138,8 +141,9 @@ public class UrlShortenerService {
         }
     }
 
-    private static boolean isReusable(UrlMapping mapping, String longUrl, Instant now) {
-        return !mapping.custom() && mapping.longUrl().equals(longUrl) && !mapping.isExpired(now);
+    private static boolean isReusable(UrlMapping mapping, String userId, String longUrl, Instant now) {
+        return !mapping.custom() && userId.equals(mapping.userId()) && mapping.longUrl().equals(longUrl)
+                && !mapping.isExpired(now);
     }
 
     private void cacheMapping(UrlMapping mapping, Instant now) {
