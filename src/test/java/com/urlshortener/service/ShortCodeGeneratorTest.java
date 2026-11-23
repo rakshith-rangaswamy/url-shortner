@@ -67,6 +67,13 @@ class ShortCodeGeneratorTest {
     }
 
     @Test
+    void keyIncludesTheUserSoUsersGetDifferentCodes() {
+        assertThat(ShortCodeGenerator.key("u1", URL)).isEqualTo("u1|" + URL);
+        assertThat(sha256.candidate(ShortCodeGenerator.key("u1", URL), 0))
+                .isNotEqualTo(sha256.candidate(ShortCodeGenerator.key("u2", URL), 0));
+    }
+
+    @Test
     void md5IsSupportedWhenConfigured() throws Exception {
         ShortCodeGenerator md5 = generator("{\"hashAlgorithm\": \"MD5\"}");
         assertThat(md5.digest("abc")).isEqualTo("900150983cd24fb0d6963f7d28e17f72");

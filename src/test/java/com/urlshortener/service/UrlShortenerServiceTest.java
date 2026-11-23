@@ -32,6 +32,8 @@ class UrlShortenerServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-23T00:00:00Z");
     private static final Duration DEFAULT_TTL = Duration.ofHours(24);
     private static final String URL = "https://example.com/page";
+    private static final String USER = "u1";
+    private static final String KEY = ShortCodeGenerator.key(USER, URL);
 
     private final FakeRepository repository = new FakeRepository();
     private final FakeCache cache = new FakeCache();
@@ -48,7 +50,11 @@ class UrlShortenerServiceTest {
     }
 
     private UrlMapping row(String code, String url, boolean custom, Instant expiresAt) {
-        return new UrlMapping(null, code, url, generator.digest(url), null, custom, NOW.minusSeconds(60), expiresAt);
+        return row(code, url, USER, custom, expiresAt);
+    }
+
+    private UrlMapping row(String code, String url, String user, boolean custom, Instant expiresAt) {
+        return new UrlMapping(null, code, url, generator.digest(url), user, custom, NOW.minusSeconds(60), expiresAt);
     }
 
     @Nested
@@ -58,7 +64,7 @@ class UrlShortenerServiceTest {
         void createsGeneratedCodeWith201AndCachesIt() {
             ShortenResult result = service.shorten(request(URL, null, null, "u1"));
             assertThat(result.created()).isTrue();
-            assertThat(result.response().shortCode()).isEqualTo(generator.candidate(URL, 0));
+            assertThat(result.response().shortCode()).isEqualTo(generator.candidate(KEY, 0));
             assertThat(result.response().shortUrl()).isEqualTo("http://sho.rt/" + result.response().shortCode());
             assertThat(result.response().userId()).isEqualTo("u1");
             assertThat(result.response().expiresAt()).isNull();
@@ -68,55 +74,77 @@ class UrlShortenerServiceTest {
 
         @Test
         void ttlSetsExpiryAndCapsCacheTtl() {
-            ShortenResult result = service.shorten(request(URL, null, 3600L, null));
+            ShortenResult result = service.shorten(request(URL, null, 3600L, USER));
             assertThat(result.response().expiresAt()).isEqualTo(NOW.plusSeconds(3600));
             assertThat(cache.ttls).containsEntry(result.response().shortCode(), Duration.ofHours(1));
         }
 
         @Test
-        void sameUrlFromAnyUserReusesExistingCodeWith200AndIgnoresNewTtl() {
+        void sameUserAndUrlReusesExistingCodeWith200AndIgnoresNewTtl() {
             ShortenResult first = service.shorten(request(URL, null, null, "u1"));
-            ShortenResult second = service.shorten(request(URL, null, 600L, "u2"));
+            ShortenResult second = service.shorten(request(URL, null, 600L, "u1"));
             assertThat(second.created()).isFalse();
             assertThat(second.response().shortCode()).isEqualTo(first.response().shortCode());
             assertThat(second.response().expiresAt()).isNull();
-            assertThat(second.response().userId()).isEqualTo("u1");
             assertThat(repository.rows).hasSize(1);
         }
 
         @Test
-        void collisionWithAnotherUrlMovesToNextCandidate() {
-            String first = generator.candidate(URL, 0);
-            repository.store(row(first, "https://other.example/x", false, null));
-            ShortenResult result = service.shorten(request(URL, null, null, null));
+        void differentUserGetsTheirOwnShortUrlForTheSameUrl() {
+            ShortenResult a = service.shorten(request(URL, null, null, "u1"));
+            ShortenResult b = service.shorten(request(URL, null, null, "u2"));
+            assertThat(b.created()).isTrue();
+            assertThat(b.response().shortCode()).isNotEqualTo(a.response().shortCode())
+                    .isEqualTo(generator.candidate(ShortCodeGenerator.key("u2", URL), 0));
+            assertThat(b.response().userId()).isEqualTo("u2");
+            assertThat(repository.rows.get(a.response().shortCode()).userId()).isEqualTo("u1");
+            assertThat(repository.rows.get(b.response().shortCode()).userId()).isEqualTo("u2");
+        }
+
+        @Test
+        void otherUsersRowHoldingTheCandidateIsNotReused() {
+            String first = generator.candidate(KEY, 0);
+            repository.hideFromReuseLookup = true;
+            repository.store(row(first, URL, "someone-else", false, null));
+            ShortenResult result = service.shorten(request(URL, null, null, USER));
             assertThat(result.created()).isTrue();
-            assertThat(result.response().shortCode()).isEqualTo(generator.candidate(URL, 1));
+            assertThat(result.response().shortCode()).isEqualTo(generator.candidate(KEY, 1));
+            assertThat(result.response().userId()).isEqualTo(USER);
+        }
+
+        @Test
+        void collisionWithAnotherUrlMovesToNextCandidate() {
+            String first = generator.candidate(KEY, 0);
+            repository.store(row(first, "https://other.example/x", false, null));
+            ShortenResult result = service.shorten(request(URL, null, null, USER));
+            assertThat(result.created()).isTrue();
+            assertThat(result.response().shortCode()).isEqualTo(generator.candidate(KEY, 1));
         }
 
         @Test
         void afterFiveRehashCollisionsUsesSaltedCandidate() {
             for (int attempt = 0; attempt <= 5; attempt++) {
-                repository.store(row(generator.candidate(URL, attempt), "https://other.example/" + attempt, false, null));
+                repository.store(row(generator.candidate(KEY, attempt), "https://other.example/" + attempt, false, null));
             }
-            ShortenResult result = service.shorten(request(URL, null, null, null));
-            assertThat(result.response().shortCode()).isEqualTo(generator.candidate(URL, 6));
+            ShortenResult result = service.shorten(request(URL, null, null, USER));
+            assertThat(result.response().shortCode()).isEqualTo(generator.candidate(KEY, 6));
         }
 
         @Test
         void expiredCodeStaysTakenSoSameUrlGetsANewCode() {
-            String first = generator.candidate(URL, 0);
+            String first = generator.candidate(KEY, 0);
             repository.store(row(first, URL, false, NOW.minusSeconds(1)));
-            ShortenResult result = service.shorten(request(URL, null, null, null));
+            ShortenResult result = service.shorten(request(URL, null, null, USER));
             assertThat(result.created()).isTrue();
-            assertThat(result.response().shortCode()).isNotEqualTo(first).isEqualTo(generator.candidate(URL, 1));
+            assertThat(result.response().shortCode()).isNotEqualTo(first).isEqualTo(generator.candidate(KEY, 1));
         }
 
         @Test
         void concurrentInsertOfSameUrlIsReusedNotDuplicated() {
-            String first = generator.candidate(URL, 0);
+            String first = generator.candidate(KEY, 0);
             repository.hideFromReuseLookup = true; // simulates the other request inserting after our lookup
             repository.store(row(first, URL, false, null));
-            ShortenResult result = service.shorten(request(URL, null, null, null));
+            ShortenResult result = service.shorten(request(URL, null, null, USER));
             assertThat(result.created()).isFalse();
             assertThat(result.response().shortCode()).isEqualTo(first);
             assertThat(repository.rows).hasSize(1);
@@ -125,15 +153,15 @@ class UrlShortenerServiceTest {
         @Test
         void givesUpWith503AfterMaxAttempts() {
             for (int attempt = 0; attempt < UrlShortenerService.MAX_ATTEMPTS; attempt++) {
-                repository.store(row(generator.candidate(URL, attempt), "https://other.example/" + attempt, false, null));
+                repository.store(row(generator.candidate(KEY, attempt), "https://other.example/" + attempt, false, null));
             }
-            assertThatThrownBy(() -> service.shorten(request(URL, null, null, null)))
+            assertThatThrownBy(() -> service.shorten(request(URL, null, null, USER)))
                     .isInstanceOf(ShortCodeExhaustedException.class);
         }
 
         @Test
         void freeCustomAliasIsUsed() {
-            ShortenResult result = service.shorten(request(URL, "myLink1", null, null));
+            ShortenResult result = service.shorten(request(URL, "myLink1", null, USER));
             assertThat(result.created()).isTrue();
             assertThat(result.response().shortCode()).isEqualTo("myLink1");
             assertThat(repository.rows.get("myLink1").custom()).isTrue();
@@ -144,7 +172,7 @@ class UrlShortenerServiceTest {
         void takenCustomAliasThrows409WithThreeFreeSuggestions() {
             repository.store(row("myLink", "https://other.example", true, null));
             repository.store(row("myLink1", "https://other.example/1", true, null));
-            assertThatThrownBy(() -> service.shorten(request(URL, "myLink", null, null)))
+            assertThatThrownBy(() -> service.shorten(request(URL, "myLink", null, USER)))
                     .isInstanceOfSatisfying(AliasTakenException.class, e ->
                             assertThat(e.suggestions()).containsExactly("myLink2", "myLink3", "myLink4"));
         }
@@ -152,21 +180,21 @@ class UrlShortenerServiceTest {
         @Test
         void expiredCustomAliasStaysTaken() {
             repository.store(row("oldOne", "https://other.example", true, NOW.minusSeconds(1)));
-            assertThatThrownBy(() -> service.shorten(request(URL, "oldOne", null, null)))
+            assertThatThrownBy(() -> service.shorten(request(URL, "oldOne", null, USER)))
                     .isInstanceOf(AliasTakenException.class);
         }
 
         @Test
         void reservedAliasIsRejected() {
-            assertThatThrownBy(() -> service.shorten(request(URL, "Docs", null, null)))
+            assertThatThrownBy(() -> service.shorten(request(URL, "Docs", null, USER)))
                     .isInstanceOf(ReservedAliasException.class);
             assertThat(repository.rows).isEmpty();
         }
 
         @Test
         void customAliasIsNotReusedForSameUrlWithoutAlias() {
-            service.shorten(request(URL, "myLink1", null, null));
-            ShortenResult generated = service.shorten(request(URL, null, null, null));
+            service.shorten(request(URL, "myLink1", null, USER));
+            ShortenResult generated = service.shorten(request(URL, null, null, USER));
             assertThat(generated.created()).isTrue();
             assertThat(generated.response().shortCode()).isNotEqualTo("myLink1");
         }
@@ -251,12 +279,14 @@ class UrlShortenerServiceTest {
         }
 
         @Override
-        public Optional<UrlMapping> findActiveByLongUrl(String longUrlHash, String longUrl, Instant now) {
+        public Optional<UrlMapping> findActiveByUserAndLongUrl(String userId, String longUrlHash, String longUrl,
+                                                             Instant now) {
             if (hideFromReuseLookup) {
                 return Optional.empty();
             }
             return rows.values().stream()
-                    .filter(m -> !m.custom() && m.longUrlHash().equals(longUrlHash) && m.longUrl().equals(longUrl))
+                    .filter(m -> !m.custom() && userId.equals(m.userId()))
+                    .filter(m -> m.longUrlHash().equals(longUrlHash) && m.longUrl().equals(longUrl))
                     .filter(m -> !m.isExpired(now))
                     .findFirst();
         }

@@ -57,7 +57,16 @@ class UrlShortenerE2EIT {
         return APP.client();
     }
 
+    static final String USER = "e2e-user";
+
+    /** POSTs the body, adding userId=USER when the test does not set one. */
     private static Response post(Map<String, Object> body) {
+        Map<String, Object> withUser = new java.util.HashMap<>(body);
+        withUser.putIfAbsent("userId", USER);
+        return postRaw(withUser);
+    }
+
+    private static Response postRaw(Map<String, Object> body) {
         return client().target(app("/api/v1/urls")).request(MediaType.APPLICATION_JSON)
                 .post(Entity.json(body));
     }
@@ -161,6 +170,28 @@ class UrlShortenerE2EIT {
         }
 
         @Test
+        void postRequiresAValidUserId() {
+            try (Response r = postRaw(Map.of("longUrl", "https://example.com/u"))) {
+                assertThat(r.getStatus()).isEqualTo(422);
+                assertThat(r.readEntity(JsonNode.class).path("details").toString()).contains("userId");
+            }
+            for (String bad : new String[]{" ", "has space", "x".repeat(65), "semi;colon"}) {
+                try (Response r = postRaw(Map.of("longUrl", "https://example.com/u", "userId", bad))) {
+                    assertThat(r.getStatus()).as(bad).isEqualTo(422);
+                }
+            }
+        }
+
+        @Test
+        void migrationMakesUserIdRequired() {
+            String nullable = Infrastructure.jdbi().withHandle(h -> h.createQuery(
+                            "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() "
+                                    + "AND table_name = 'url_mapping' AND column_name = 'user_id'")
+                    .mapTo(String.class).one());
+            assertThat(nullable).isEqualTo("NO");
+        }
+
+        @Test
         void postRejectsReservedAlias() {
             for (String alias : new String[]{"docs", "Docs", "api", "health"}) {
                 try (Response response = post(Map.of("longUrl", "https://example.com/r", "customAlias", alias))) {
@@ -228,13 +259,44 @@ class UrlShortenerE2EIT {
         }
 
         @Test
-        void sameUrlFromDifferentUsersReturnsSameShortCode() {
+        void sameUrlFromDifferentUsersGivesEachTheirOwnShortUrl() {
             String url = uniqueUrl("shared");
-            String a = create(Map.of("longUrl", url, "userId", "user-a")).path("shortCode").asText();
-            JsonNode b = create(Map.of("longUrl", url, "userId", "user-b", "ttlSeconds", 600));
-            assertThat(b.path("shortCode").asText()).isEqualTo(a);
-            assertThat(b.path("userId").asText()).isEqualTo("user-a");
-            assertThat(b.has("expiresAt")).isFalse();
+            JsonNode a = create(Map.of("longUrl", url, "userId", "user-a"));
+            JsonNode b;
+            try (Response response = post(Map.of("longUrl", url, "userId", "user-b"))) {
+                assertThat(response.getStatus()).isEqualTo(201);
+                b = response.readEntity(JsonNode.class);
+            }
+            assertThat(b.path("shortCode").asText()).isNotEqualTo(a.path("shortCode").asText());
+            assertThat(a.path("userId").asText()).isEqualTo("user-a");
+            assertThat(b.path("userId").asText()).isEqualTo("user-b");
+            for (JsonNode link : new JsonNode[]{a, b}) {
+                try (Response redirect = get(link.path("shortCode").asText())) {
+                    assertThat(redirect.getStatus()).isEqualTo(302);
+                    assertThat(redirect.getHeaderString("Location")).isEqualTo(url);
+                }
+            }
+        }
+
+        @Test
+        void sameUserReusesOwnShortUrlAndIgnoresNewTtl() {
+            String url = uniqueUrl("mine");
+            String first = create(Map.of("longUrl", url, "userId", "user-c")).path("shortCode").asText();
+            try (Response response = post(Map.of("longUrl", url, "userId", "user-c", "ttlSeconds", 600))) {
+                assertThat(response.getStatus()).isEqualTo(200);
+                JsonNode body = response.readEntity(JsonNode.class);
+                assertThat(body.path("shortCode").asText()).isEqualTo(first);
+                assertThat(body.has("expiresAt")).isFalse();
+            }
+        }
+
+        @Test
+        void customAliasIsUniqueAcrossUsers() {
+            String alias = "x" + UUID.randomUUID().toString().replace("-", "").substring(0, 6);
+            post(Map.of("longUrl", uniqueUrl("a1"), "userId", "user-a", "customAlias", alias)).close();
+            try (Response response = post(Map.of("longUrl", uniqueUrl("a2"), "userId", "user-b", "customAlias", alias))) {
+                assertThat(response.getStatus()).isEqualTo(409);
+            }
         }
 
         @Test

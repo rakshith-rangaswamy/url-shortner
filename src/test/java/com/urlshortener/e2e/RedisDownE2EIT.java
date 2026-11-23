@@ -68,7 +68,7 @@ class RedisDownE2EIT {
         try (Response response = APP.client()
                 .target("http://localhost:" + APP.getLocalPort() + "/api/v1/urls")
                 .request(MediaType.APPLICATION_JSON)
-                .post(Entity.json(Map.of("longUrl", longUrl)))) {
+                .post(Entity.json(Map.of("longUrl", longUrl, "userId", "redis-down-user")))) {
             assertThat(response.getStatus()).isEqualTo(201);
             code = response.readEntity(JsonNode.class).path("shortCode").asText();
         }

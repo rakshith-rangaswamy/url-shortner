@@ -4,10 +4,10 @@ A Bitly-style URL shortener built on **Dropwizard 5** (Java 21, Maven), with **M
 
 ## Functionality
 
-1. **Shorten** an http or https URL into a 7-character Base62 code, optionally tagged with a `userId`. Shortening the same URL again, by any user, returns the existing short URL (`200`) while it has not expired; otherwise a new one is created (`201`).
-2. **Custom alias** (optional): 3 to 7 letters or digits. Reserved words such as `docs`, `api` or `health` are rejected (`422`). A taken alias returns `409 Conflict` with up to 3 free suggestions.
+1. **Shorten** an http or https URL into a 7-character Base62 code owned by a required `userId`. When the same user shortens the same URL again they get their existing short URL back (`200`) while it has not expired; a different user gets their own short URL (`201`).
+2. **Custom alias** (optional): 3 to 7 letters or digits, unique across all users. Reserved words such as `docs`, `api` or `health` are rejected (`422`). A taken alias returns `409 Conflict` with up to 3 free suggestions.
 3. **Expiry** (optional): `ttlSeconds` from 60 seconds to 10 years. After expiry the short URL returns `410 Gone`. Expired codes are never handed out again.
-4. **Redirect**: `GET /{shortCode}` answers `302 Found` with the original URL.
+4. **Redirect**: `GET /{shortCode}` answers `302 Found` with the original URL. Redirects are public; no userId is needed.
 
 ## API
 
@@ -21,7 +21,7 @@ curl -i -X POST localhost:8080/api/v1/urls -H 'Content-Type: application/json' \
   -d '{"longUrl": "https://example.com/some/very/long/path", "customAlias": "promo", "ttlSeconds": 604800, "userId": "user-42"}'
 ```
 
-Only `longUrl` is required. Response (`expiresAt` is omitted when the link never expires):
+`longUrl` and `userId` (1 to 64 letters, digits, `-`, `_` or `.`) are required. Response (`expiresAt` is omitted when the link never expires):
 
 ```json
 {
@@ -41,15 +41,15 @@ A taken alias:
 
 All errors share this shape; validation errors carry `details`, one entry per invalid field.
 
-When an existing short URL is reused, the new request's `ttlSeconds` and `userId` are ignored and the stored values are returned.
+When a user's existing short URL is reused, the new request's `ttlSeconds` is ignored and the stored values are returned (ADR-0019, ADR-0020).
 
 **Swagger UI:** http://localhost:8080/docs/ · **OpenAPI spec:** http://localhost:8080/openapi.json
 
 ## How it works
 
-**Short codes** (ADR-0006, ADR-0007). The code is SHA-256 of the URL, reduced to 7 Base62 characters (62^7 is about 3.5 trillion codes). On a collision with a different URL the hash is re-hashed up to 5 times, then a counter is appended (`url#1`, `url#2`, ...). Up to 20 candidates are tried.
+**Short codes** (ADR-0006, ADR-0007, ADR-0020). The code is SHA-256 of `userId|longUrl`, reduced to 7 Base62 characters (62^7 is about 3.5 trillion codes). On a collision with a different URL the hash is re-hashed up to 5 times, then a counter is appended (`key#1`, `key#2`, ...). Up to 20 candidates are tried.
 
-**Uniqueness** (ADR-0019). The `UNIQUE` index on `short_code` is the check: the service inserts the row, and a duplicate-key error means the code is taken. Two concurrent requests for the same new URL converge on one code.
+**Uniqueness** (ADR-0019). The `UNIQUE` index on `short_code` is the check: the service inserts the row, and a duplicate-key error means the code is taken. Two concurrent requests by the same user for the same new URL converge on one code.
 
 **Redirect read path** (ADR-0005), cache-aside with MySQL as the source of truth:
 
@@ -121,8 +121,9 @@ mvn test      # unit tests
 mvn verify    # + end-to-end tests (needs Docker; starts MySQL and Redis via Testcontainers)
 ```
 
-- **Unit:** Base62, code generation and the collision policy, alias suggestions, reserved aliases, URL validation, config limits, and the service (create, reuse, collisions, salt fallback, races, custom aliases, 409, cache-aside redirect, 404, 410, cache TTL capping) against in-memory fakes.
-- **End-to-end:** schema and health, OpenAPI, validation errors, create (201), reuse (200, any user), TTL, custom alias, 409 with 3 usable suggestions, 302 redirect, cache refill after a miss, cache TTL capped by expiry, 410 after expiry, new code after expiry, 404, redirect under 200ms.
+- **Unit:** Base62, code generation and the collision policy, alias suggestions, reserved aliases, URL validation, config limits, and the service (create, reuse, collisions, salt fallback, races, custom aliases, 409, cache-aside redirect, 404, 410, cache TTL capping) against in-memory fakes, including per-user reuse and races.
+- **End-to-end:** schema and health, OpenAPI, validation errors, create (201), reuse (200, same user), separate links per user, required and validated userId, aliases unique across users, TTL, custom alias, 409 with 3 usable suggestions, 302 redirect, cache refill after a miss, cache TTL capped by expiry, 410 after expiry, new code after expiry, 404, redirect under 200ms.
+- **Migration:** V2 assigns pre-existing rows without a user to `anonymous` and makes `user_id` NOT NULL.
 - **Redis down:** the app starts without Redis, reports it unhealthy in under 2 seconds, and still shortens and redirects from MySQL within 200ms.
 
 ## Architecture decisions

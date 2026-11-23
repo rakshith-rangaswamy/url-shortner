@@ -38,10 +38,11 @@ public class UrlResource {
     @POST
     @Timed(name = "shorten")
     @Operation(summary = "Shorten a URL",
-            description = "Creates a short URL (201), or returns the existing one (200) if this URL was already "
-                    + "shortened and has not expired. Optional custom alias and TTL.",
+            description = "Creates a short URL owned by userId (201), or returns that user's existing one (200) if "
+                    + "they already shortened this URL and it has not expired. Other users get their own short URL. "
+                    + "Optional custom alias (unique across all users) and TTL.",
             responses = {
-                    @ApiResponse(responseCode = "200", description = "Existing, unexpired short URL reused",
+                    @ApiResponse(responseCode = "200", description = "The same user's existing, unexpired short URL reused",
                             content = @Content(schema = @Schema(implementation = ShortenResponse.class))),
                     @ApiResponse(responseCode = "201", description = "New short URL created; Location header points at it",
                             content = @Content(schema = @Schema(implementation = ShortenResponse.class))),

@@ -9,7 +9,7 @@ import java.time.Instant;
  * @param shortCode   7-char Base62 code (generated or custom alias), unique
  * @param longUrl     original URL
  * @param longUrlHash hex digest of the long URL, used to find an existing short URL for the same input
- * @param userId      optional owner
+ * @param userId      owner; every short URL belongs to exactly one user (ADR-0020)
  * @param custom      true when the code is a user-supplied alias
  * @param createdAt   creation time
  * @param expiresAt   null means it never expires

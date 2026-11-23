@@ -21,22 +21,24 @@ public interface UrlMappingRepository {
     Optional<UrlMapping> findByShortCode(@Bind("shortCode") String shortCode);
 
     /**
-     * The existing generated short URL for this long URL, by any user, if it is still valid at {@code now}.
-     * Matches the hash for the index, then the full URL so a hash collision can never return the wrong link.
-     * Oldest row first, so any duplicates converge on one code.
+     * This user's existing generated short URL for this long URL, if it is still valid at {@code now}
+     * (ADR-0020). Uses the (user_id, long_url_hash) index, then compares the full URL so a hash collision can
+     * never return the wrong link. Oldest row first, so any duplicates converge on one code.
      */
     @SqlQuery("""
             SELECT * FROM url_mapping
-            WHERE long_url_hash = :longUrlHash
+            WHERE user_id = :userId
+              AND long_url_hash = :longUrlHash
               AND long_url = :longUrl
               AND is_custom = FALSE
               AND (expires_at IS NULL OR expires_at > :now)
             ORDER BY id
             LIMIT 1
             """)
-    Optional<UrlMapping> findActiveByLongUrl(@Bind("longUrlHash") String longUrlHash,
-                                             @Bind("longUrl") String longUrl,
-                                             @Bind("now") Instant now);
+    Optional<UrlMapping> findActiveByUserAndLongUrl(@Bind("userId") String userId,
+                                                    @Bind("longUrlHash") String longUrlHash,
+                                                    @Bind("longUrl") String longUrl,
+                                                    @Bind("now") Instant now);
 
     /** The subset of {@code shortCodes} already stored (expired or not). Must not be called with an empty list. */
     @SqlQuery("SELECT short_code FROM url_mapping WHERE short_code IN (<shortCodes>)")

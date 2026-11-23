@@ -12,7 +12,7 @@ Implementing the shortening flow (replacing the scaffold of ADR-0017) raised thr
 
 1. **Insert first.** Uniqueness is checked by inserting the row and relying on the `UNIQUE` index on `short_code`. A duplicate-key error (MySQL 1062) means the code is taken: for a generated code the next candidate is tried (ADR-0007); for a custom alias the answer is 409 with suggestions (ADR-0009). There is no separate "is it free?" query before the insert.
 2. **Expired codes stay taken.** An expired row keeps its code, for generated codes and custom aliases alike. A short URL therefore never starts pointing somewhere else. Shortening the same URL again after expiry gives a new code.
-3. **Reuse returns the existing link as is.** When an unexpired generated short URL exists for the URL, it is returned with 200 and the new request's `ttlSeconds` and `userId` are ignored. Changing the expiry of a link someone else created would surprise them.
+3. **Reuse returns the existing link as is.** When an unexpired generated short URL exists for the URL, it is returned with 200 and the new request's `ttlSeconds` is ignored. Since ADR-0020 reuse only happens for the same user, so the owner never changes.
 4. **New links are written to Redis immediately**, so the first redirect is a cache hit.
 
 ## Consequences
