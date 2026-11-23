@@ -127,6 +127,10 @@ Where it lives: `UrlShortenerService.resolve`, `cache/UrlCache`, `cache/RedisUrl
 
 - **Concurrent duplicates.** Two simultaneous requests for the same new URL can both insert, giving two codes for one URL. Both work; the reuse lookup returns the oldest row, so later requests converge on one code. Accepted under eventual consistency.
 
+## Architecture decisions
+
+All decisions, with context and trade-offs, are recorded in [`docs/adr/`](docs/adr/README.md).
+
 ## Design decisions still open
 
 These defaults are in place and each lives in a single config value or class:
