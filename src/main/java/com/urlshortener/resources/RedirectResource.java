@@ -43,8 +43,6 @@ public class RedirectResource {
                     @ApiResponse(responseCode = "404", description = "Unknown short code",
                             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
                     @ApiResponse(responseCode = "410", description = "Short URL has expired",
-                            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-                    @ApiResponse(responseCode = "501", description = "Not implemented yet (scaffold)",
                             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
             })
     public Response redirect(@Parameter(description = "Base62 short code", example = "aB3dE9x")

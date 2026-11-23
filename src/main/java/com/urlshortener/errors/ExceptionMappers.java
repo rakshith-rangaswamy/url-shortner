@@ -2,8 +2,8 @@ package com.urlshortener.errors;
 
 import com.urlshortener.api.ErrorResponse;
 import com.urlshortener.service.AliasTakenException;
-import com.urlshortener.service.NotImplementedYetException;
 import com.urlshortener.service.ReservedAliasException;
+import com.urlshortener.service.ShortCodeExhaustedException;
 import com.urlshortener.service.ShortUrlExpiredException;
 import com.urlshortener.service.ShortUrlNotFoundException;
 import io.dropwizard.jersey.validation.ConstraintMessage;
@@ -14,14 +14,14 @@ import jakarta.ws.rs.ext.ExceptionMapper;
 
 import java.util.List;
 
-/** Maps service exceptions to the HTTP contract (404, 409, 410, 422, 501). */
+/** Maps service exceptions to the HTTP contract (404, 409, 410, 422, 503). */
 public final class ExceptionMappers {
 
     private ExceptionMappers() {
     }
 
     public static List<Object> all() {
-        return List.of(new NotImplemented(), new AliasTaken(), new Expired(), new NotFound(),
+        return List.of(new Exhausted(), new AliasTaken(), new Expired(), new NotFound(),
                 new Reserved(), new Validation());
     }
 
@@ -29,10 +29,10 @@ public final class ExceptionMappers {
         return Response.status(status).type(MediaType.APPLICATION_JSON_TYPE).entity(body).build();
     }
 
-    public static class NotImplemented implements ExceptionMapper<NotImplementedYetException> {
+    public static class Exhausted implements ExceptionMapper<ShortCodeExhaustedException> {
         @Override
-        public Response toResponse(NotImplementedYetException e) {
-            return json(501, new ErrorResponse(501, e.getMessage()));
+        public Response toResponse(ShortCodeExhaustedException e) {
+            return json(503, new ErrorResponse(503, e.getMessage()));
         }
     }
 

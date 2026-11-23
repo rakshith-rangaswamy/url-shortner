@@ -1,6 +1,6 @@
 # ADR-0017: Scaffold first: unimplemented behaviour returns 501
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0019 (2026-11-23)
 - **Date:** 2026-11-22
 - **Deciders:** Rakshith
 

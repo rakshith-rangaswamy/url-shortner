@@ -15,4 +15,4 @@ End-to-end tests (`*IT`) start **MySQL and Redis with Testcontainers** and the w
 ## Consequences
 
 - `mvn verify` needs Docker.
-- Disabled tests double as an executable spec.
+- Disabled tests double as an executable spec. As of ADR-0019 every behaviour is implemented and no test is disabled.

@@ -15,5 +15,6 @@ Before generating a code, look for an unexpired, non-custom mapping with the sam
 ## Consequences
 
 - The `userId` on a reused mapping is the original creator's.
-- **Trade-off:** two concurrent requests for the same new URL can both insert. Both codes work, and later lookups converge on the oldest row. Accepted under eventual consistency (ADR-0016).
+- Concurrent requests for the same new URL compute the same first candidate, so one insert wins and the other hits a duplicate key; it then sees that the row holding the code is the same URL and returns it with 200. No duplicate is created in that case.
+- The new request's TTL and userId are ignored on reuse (ADR-0019).
 - Custom aliases are never reused this way.

@@ -10,9 +10,10 @@ A truncated 7-character hash can collide with an existing code for a different U
 
 ## Decision
 
-On collision, re-hash up to **5** times (`shortener.maxRehashAttempts`). If it still collides, append a salt or counter to the input and hash again. The `UNIQUE` index on `short_code` is the final guard: a concurrent insert that loses the race is retried as a collision.
+On collision, re-hash up to **5** times (`shortener.maxRehashAttempts`). If it still collides, append a salt or counter to the input and hash again. The `UNIQUE` index on `short_code` is the final guard: a concurrent insert that loses the race is treated as a collision and the next candidate is tried.
 
 ## Consequences
 
 - Uniqueness holds even across multiple app instances.
-- The policy lives in `ShortCodeGenerator.candidate(url, user, attempt)`; tests are written and disabled until it is implemented.
+- The policy lives in `ShortCodeGenerator.candidate(url, attempt)`. `UrlShortenerService` tries up to 20 candidates, then answers 503 (practically unreachable).
+- The insert itself is the uniqueness check (ADR-0019): there is no separate "check, then insert" step to race.

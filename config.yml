@@ -30,7 +30,7 @@ redis:
 # Short-code rules (service/ package)
 shortener:
   baseUrl: ${BASE_URL:-http://localhost:8080}
-  hashAlgorithm: SHA-256     # SHA-256 or MD5 (OPEN QUESTION which one)
+  hashAlgorithm: SHA-256     # SHA-256 (ADR-0006); MD5 also accepted
   codeLength: 7              # Base62; max 7 (DB column and route allow 7)
   maxRehashAttempts: 5       # then fall back to salt/counter
   aliasSuggestionCount: 3    # returned with 409 when a custom alias is taken
