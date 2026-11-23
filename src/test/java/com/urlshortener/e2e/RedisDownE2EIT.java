@@ -11,7 +11,6 @@ import io.dropwizard.testing.junit5.DropwizardExtensionsSupport;
 import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
@@ -24,7 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The app pointed at a Redis port where nothing listens. It must still start, report Redis unhealthy
- * quickly (no hang), and keep serving: the cache is an optimisation, not a dependency.
+ * quickly (no hang), and keep shortening and redirecting from MySQL: the cache is an optimisation, not a
+ * dependency.
  */
 @ExtendWith(DropwizardExtensionsSupport.class)
 class RedisDownE2EIT {
@@ -62,18 +62,26 @@ class RedisDownE2EIT {
     }
 
     @Test
-    void apiStillServesRequests() {
+    void shortenAndRedirectStillWorkFromMysqlWithin200ms() {
+        String longUrl = "https://example.com/redis-down/" + java.util.UUID.randomUUID();
+        String code;
         try (Response response = APP.client()
                 .target("http://localhost:" + APP.getLocalPort() + "/api/v1/urls")
                 .request(MediaType.APPLICATION_JSON)
-                .post(Entity.json(Map.of("longUrl", "https://example.com/no-cache")))) {
-            assertThat(response.getStatus()).isEqualTo(501); // wired, not implemented yet
+                .post(Entity.json(Map.of("longUrl", longUrl)))) {
+            assertThat(response.getStatus()).isEqualTo(201);
+            code = response.readEntity(JsonNode.class).path("shortCode").asText();
         }
-    }
-
-    @Test
-    @Disabled("Business logic not implemented yet")
-    void redirectFallsBackToMysqlWithin200ms() {
-        // create a short URL, then GET it: expect 302 to the long URL in under 200ms with Redis down
+        String url = "http://localhost:" + APP.getLocalPort() + "/" + code;
+        APP.client().target(url).request().property("jersey.config.client.followRedirects", false)
+                .get().close(); // warm up
+        long start = System.nanoTime();
+        try (Response response = APP.client().target(url).request()
+                .property("jersey.config.client.followRedirects", false).get()) {
+            long millis = (System.nanoTime() - start) / 1_000_000;
+            assertThat(response.getStatus()).isEqualTo(302);
+            assertThat(response.getHeaderString("Location")).isEqualTo(longUrl);
+            assertThat(millis).isLessThan(200);
+        }
     }
 }

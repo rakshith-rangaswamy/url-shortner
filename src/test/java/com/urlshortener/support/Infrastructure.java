@@ -1,8 +1,10 @@
 package com.urlshortener.support;
 
+import org.jdbi.v3.core.Jdbi;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.mysql.MySQLContainer;
 import org.testcontainers.utility.DockerImageName;
+import redis.clients.jedis.Jedis;
 
 /**
  * MySQL and Redis containers shared by all end-to-end tests in one JVM.
@@ -24,5 +26,13 @@ public final class Infrastructure {
     }
 
     private Infrastructure() {
+    }
+
+    public static Jdbi jdbi() {
+        return Jdbi.create(MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
+    }
+
+    public static Jedis redis() {
+        return new Jedis(REDIS.getHost(), REDIS.getMappedPort(6379));
     }
 }

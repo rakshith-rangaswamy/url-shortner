@@ -3,7 +3,8 @@ package com.urlshortener.analytics;
 /**
  * Records redirect clicks. 302 redirects are used so every click reaches the service.
  *
- * OPEN QUESTION: whether click counting belongs in this phase. The scaffold wires a no-op implementation.
+ * Click counting is out of scope for now (ADR-0018), so the app wires {@link #NO_OP}. A real tracker can be
+ * plugged in without changing the redirect code.
  */
 public interface ClickTracker {
 

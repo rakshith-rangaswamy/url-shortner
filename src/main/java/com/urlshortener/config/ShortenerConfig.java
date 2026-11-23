@@ -18,7 +18,7 @@ public class ShortenerConfig {
     @JsonProperty
     private String baseUrl = "http://localhost:8080";
 
-    /** OPEN QUESTION: SHA-256 or MD5. Only these two are accepted. */
+    /** SHA-256 (default, ADR-0006) or MD5. */
     @NotBlank
     @Pattern(regexp = "SHA-256|MD5", message = "must be SHA-256 or MD5")
     @JsonProperty

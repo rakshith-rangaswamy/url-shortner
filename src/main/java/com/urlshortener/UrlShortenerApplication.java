@@ -1,5 +1,6 @@
 package com.urlshortener;
 
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.urlshortener.analytics.ClickTracker;
 import com.urlshortener.cache.RedisClient;
 import com.urlshortener.cache.RedisUrlCache;
@@ -26,6 +27,9 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import org.jdbi.v3.core.Jdbi;
 
+import java.security.SecureRandom;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.Set;
 
 /** Entry point: {@code java -jar url-shortener.jar server config.yml}. */
@@ -45,6 +49,9 @@ public class UrlShortenerApplication extends Application<UrlShortenerConfigurati
 
     @Override
     public void initialize(Bootstrap<UrlShortenerConfiguration> bootstrap) {
+        // ISO-8601 timestamps in JSON ("2026-11-30T00:00:00Z"), not epoch numbers
+        bootstrap.getObjectMapper().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
         // Allow ${ENV_VAR:-default} in config.yml
         bootstrap.setConfigurationSourceProvider(new SubstitutingSourceProvider(
                 bootstrap.getConfigurationSourceProvider(), new EnvironmentVariableSubstitutor(false)));
@@ -68,13 +75,18 @@ public class UrlShortenerApplication extends Application<UrlShortenerConfigurati
 
         // Conversion service
         ShortenerConfig shortener = config.getShortener();
+        AliasPolicy aliasPolicy = new AliasPolicy(shortener.getReservedAliases());
         UrlShortenerService service = new UrlShortenerService(
                 repository,
-                new RedisUrlCache(redis),
+                new RedisUrlCache(redis, environment.metrics()),
                 new ShortCodeGenerator(shortener),
-                new AliasSuggester(shortener.getAliasSuggestionCount()),
-                new AliasPolicy(shortener.getReservedAliases()),
-                ClickTracker.NO_OP);
+                new AliasSuggester(shortener.getAliasSuggestionCount(), aliasPolicy,
+                        repository::findExistingCodes, new SecureRandom()),
+                aliasPolicy,
+                ClickTracker.NO_OP,
+                shortener.getBaseUrl(),
+                Duration.ofSeconds(config.getRedis().getDefaultTtlSeconds()),
+                Clock.systemUTC());
 
         // HTTP API
         environment.jersey().register(new UrlResource(service));

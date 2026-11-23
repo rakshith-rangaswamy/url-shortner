@@ -49,7 +49,7 @@ public class UrlResource {
                             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
                     @ApiResponse(responseCode = "422", description = "Invalid request body or reserved alias",
                             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-                    @ApiResponse(responseCode = "501", description = "Not implemented yet (scaffold)",
+                    @ApiResponse(responseCode = "503", description = "No free short code found (practically unreachable)",
                             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
             })
     public Response shorten(@NotNull @Valid ShortenRequest request) {

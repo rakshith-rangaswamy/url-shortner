@@ -14,21 +14,24 @@ import jakarta.ws.rs.client.Entity;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jdbi.v3.core.Jdbi;
-import org.junit.jupiter.api.Disabled;
+import redis.clients.jedis.Jedis;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * End-to-end tests: real MySQL and Redis (Testcontainers) and the full Dropwizard app over HTTP.
  *
- * "Scaffold" tests check the wiring works today. "Target behaviour" tests describe the agreed functionality
- * and are disabled until each feature is implemented.
+ * "Platform" covers schema, health, OpenAPI and validation. "Shorten" and "Redirect" cover the API behaviour,
+ * including the Redis cache-aside path.
  */
 @ExtendWith(DropwizardExtensionsSupport.class)
 class UrlShortenerE2EIT {
@@ -66,8 +69,8 @@ class UrlShortenerE2EIT {
     }
 
     @Nested
-    @DisplayName("Scaffold")
-    class Scaffold {
+    @DisplayName("Platform: schema, health, docs, validation")
+    class Platform {
 
         @Test
         void migrationCreatesUrlMappingTable() {
@@ -145,6 +148,19 @@ class UrlShortenerE2EIT {
         }
 
         @Test
+        void postRejectsAliasShorterThanThreeAndTtlOutOfRange() {
+            try (Response r = post(Map.of("longUrl", "https://example.com/v", "customAlias", "ab"))) {
+                assertThat(r.getStatus()).isEqualTo(422);
+            }
+            try (Response r = post(Map.of("longUrl", "https://example.com/v", "ttlSeconds", 59))) {
+                assertThat(r.getStatus()).isEqualTo(422);
+            }
+            try (Response r = post(Map.of("longUrl", "https://example.com/v", "ttlSeconds", 315_360_001L))) {
+                assertThat(r.getStatus()).isEqualTo(422);
+            }
+        }
+
+        @Test
         void postRejectsReservedAlias() {
             for (String alias : new String[]{"docs", "Docs", "api", "health"}) {
                 try (Response response = post(Map.of("longUrl", "https://example.com/r", "customAlias", alias))) {
@@ -153,50 +169,53 @@ class UrlShortenerE2EIT {
                 }
             }
         }
+    }
 
-        @Test
-        void postIsWiredButNotImplemented() {
-            try (Response response = post(Map.of("longUrl", "https://example.com/a"))) {
-                assertThat(response.getStatus()).isEqualTo(501);
-            }
+    /** A URL no other test uses, so tests stay independent in the shared database. */
+    private static String uniqueUrl(String label) {
+        return "https://example.com/" + label + "/" + UUID.randomUUID();
+    }
+
+    private static JsonNode create(Map<String, Object> body) {
+        try (Response response = post(body)) {
+            assertThat(response.getStatus()).isIn(200, 201);
+            return response.readEntity(JsonNode.class);
         }
+    }
 
-        @Test
-        void getIsWiredButNotImplemented() {
-            try (Response response = get("abc1234")) {
-                assertThat(response.getStatus()).isEqualTo(501);
-            }
+    /** Moves a mapping's expiry into the past and drops it from Redis, as if its TTL had run out. */
+    private static void expireNow(String shortCode) {
+        Infrastructure.jdbi().useHandle(h -> h.createUpdate(
+                        "UPDATE url_mapping SET expires_at = :past WHERE short_code = :code")
+                .bind("past", Timestamp.from(Instant.now().minusSeconds(1)))
+                .bind("code", shortCode)
+                .execute());
+        try (Jedis redis = Infrastructure.redis()) {
+            redis.del("url:" + shortCode);
         }
     }
 
     @Nested
-    @DisplayName("Target behaviour (enable as features land)")
-    @Disabled("Business logic not implemented yet")
-    class TargetBehaviour {
+    @DisplayName("Shorten")
+    class Shorten {
 
         @Test
-        void postCreatesSevenCharBase62ShortUrl() {
-            try (Response response = post(Map.of("longUrl", "https://example.com/create"))) {
+        void createsSevenCharBase62ShortUrlWith201AndLocation() {
+            String url = uniqueUrl("create");
+            try (Response response = post(Map.of("longUrl", url))) {
                 assertThat(response.getStatus()).isEqualTo(201);
                 JsonNode body = response.readEntity(JsonNode.class);
-                assertThat(body.path("shortCode").asText()).matches("[A-Za-z0-9]{7}");
-                assertThat(body.path("shortUrl").asText()).startsWith("http://localhost/");
-            }
-        }
-
-        @Test
-        void getRedirectsWith302ToOriginalUrl() {
-            String code = post(Map.of("longUrl", "https://example.com/redirect"))
-                    .readEntity(JsonNode.class).path("shortCode").asText();
-            try (Response response = get(code)) {
-                assertThat(response.getStatus()).isEqualTo(302);
-                assertThat(response.getHeaderString("Location")).isEqualTo("https://example.com/redirect");
+                String code = body.path("shortCode").asText();
+                assertThat(code).matches("[A-Za-z0-9]{7}");
+                assertThat(body.path("shortUrl").asText()).isEqualTo("http://localhost/" + code);
+                assertThat(body.path("longUrl").asText()).isEqualTo(url);
+                assertThat(response.getHeaderString("Location")).isEqualTo("http://localhost/" + code);
             }
         }
 
         @Test
         void sameUrlReturnsExistingShortCodeWith200() {
-            Map<String, Object> body = Map.of("longUrl", "https://example.com/same");
+            Map<String, Object> body = Map.of("longUrl", uniqueUrl("same"));
             String first;
             try (Response created = post(body)) {
                 assertThat(created.getStatus()).isEqualTo(201);
@@ -210,48 +229,117 @@ class UrlShortenerE2EIT {
 
         @Test
         void sameUrlFromDifferentUsersReturnsSameShortCode() {
-            String a = post(Map.of("longUrl", "https://example.com/shared", "userId", "user-a"))
-                    .readEntity(JsonNode.class).path("shortCode").asText();
-            String b = post(Map.of("longUrl", "https://example.com/shared", "userId", "user-b"))
-                    .readEntity(JsonNode.class).path("shortCode").asText();
-            assertThat(b).isEqualTo(a);
+            String url = uniqueUrl("shared");
+            String a = create(Map.of("longUrl", url, "userId", "user-a")).path("shortCode").asText();
+            JsonNode b = create(Map.of("longUrl", url, "userId", "user-b", "ttlSeconds", 600));
+            assertThat(b.path("shortCode").asText()).isEqualTo(a);
+            assertThat(b.path("userId").asText()).isEqualTo("user-a");
+            assertThat(b.has("expiresAt")).isFalse();
+        }
+
+        @Test
+        void ttlSetsExpiresAt() {
+            JsonNode body = create(Map.of("longUrl", uniqueUrl("ttl"), "ttlSeconds", 3600));
+            Instant expiresAt = Instant.parse(body.path("expiresAt").asText());
+            assertThat(expiresAt).isBetween(Instant.now().plusSeconds(3500), Instant.now().plusSeconds(3700));
         }
 
         @Test
         void customAliasIsUsedWhenFree() {
-            JsonNode body = post(Map.of("longUrl", "https://example.com/custom", "customAlias", "myLink1"))
-                    .readEntity(JsonNode.class);
-            assertThat(body.path("shortCode").asText()).isEqualTo("myLink1");
-        }
-
-        @Test
-        void takenCustomAliasReturns409WithUpToThreeSuggestions() {
-            post(Map.of("longUrl", "https://example.com/one", "customAlias", "taken01")).close();
-            try (Response response = post(Map.of("longUrl", "https://example.com/two", "customAlias", "taken01"))) {
-                assertThat(response.getStatus()).isEqualTo(409);
-                JsonNode suggestions = response.readEntity(JsonNode.class).path("suggestions");
-                assertThat(suggestions.size()).isBetween(1, 3);
+            String alias = "c" + UUID.randomUUID().toString().replace("-", "").substring(0, 6);
+            try (Response response = post(Map.of("longUrl", uniqueUrl("custom"), "customAlias", alias))) {
+                assertThat(response.getStatus()).isEqualTo(201);
+                assertThat(response.readEntity(JsonNode.class).path("shortCode").asText()).isEqualTo(alias);
             }
         }
 
         @Test
-        void expiredShortUrlReturns410() throws InterruptedException {
-            String code = post(Map.of("longUrl", "https://example.com/ttl", "ttlSeconds", 1))
-                    .readEntity(JsonNode.class).path("shortCode").asText();
-            Thread.sleep(1_500);
+        void takenCustomAliasReturns409WithThreeFreeSuggestions() {
+            post(Map.of("longUrl", uniqueUrl("one"), "customAlias", "taken")).close();
+            try (Response response = post(Map.of("longUrl", uniqueUrl("two"), "customAlias", "taken"))) {
+                assertThat(response.getStatus()).isEqualTo(409);
+                JsonNode body = response.readEntity(JsonNode.class);
+                assertThat(body.path("code").asInt()).isEqualTo(409);
+                JsonNode suggestions = body.path("suggestions");
+                assertThat(suggestions.size()).isEqualTo(3);
+                for (JsonNode s : suggestions) {
+                    try (Response free = post(Map.of("longUrl", uniqueUrl("alt"), "customAlias", s.asText()))) {
+                        assertThat(free.getStatus()).as(s.asText()).isEqualTo(201);
+                    }
+                }
+            }
+        }
+
+        @Test
+        void newShortUrlIsCachedImmediately() {
+            String code = create(Map.of("longUrl", uniqueUrl("warm"))).path("shortCode").asText();
+            try (Jedis redis = Infrastructure.redis()) {
+                assertThat(redis.get("url:" + code)).isNotNull();
+            }
+        }
+    }
+
+    @Nested
+    @DisplayName("Redirect (Redis first, MySQL on a miss)")
+    class Redirect {
+
+        @Test
+        void redirectsWith302ToOriginalUrl() {
+            String url = uniqueUrl("redirect");
+            String code = create(Map.of("longUrl", url)).path("shortCode").asText();
             try (Response response = get(code)) {
-                assertThat(response.getStatus()).isEqualTo(410);
+                assertThat(response.getStatus()).isEqualTo(302);
+                assertThat(response.getHeaderString("Location")).isEqualTo(url);
             }
         }
 
         @Test
         void cacheMissReadsMysqlAndRefillsCache() {
-            // seed url_mapping directly, GET it: expect 302, and Redis now holds url:{code} with a TTL
+            String url = uniqueUrl("miss");
+            String code = create(Map.of("longUrl", url)).path("shortCode").asText();
+            try (Jedis redis = Infrastructure.redis()) {
+                redis.del("url:" + code);
+                try (Response response = get(code)) {
+                    assertThat(response.getStatus()).isEqualTo(302);
+                    assertThat(response.getHeaderString("Location")).isEqualTo(url);
+                }
+                assertThat(redis.get("url:" + code)).isEqualTo(url);
+                assertThat(redis.pttl("url:" + code)).isPositive();
+            }
         }
 
         @Test
         void cacheEntryDoesNotOutliveTheShortUrl() {
-            // seed a row expiring in 30s, GET it: expect Redis PTTL for url:{code} <= 30s
+            String code = create(Map.of("longUrl", uniqueUrl("soon"), "ttlSeconds", 60)).path("shortCode").asText();
+            try (Jedis redis = Infrastructure.redis()) {
+                redis.del("url:" + code);
+                get(code).close();
+                assertThat(redis.pttl("url:" + code)).isBetween(1L, 60_000L);
+            }
+        }
+
+        @Test
+        void expiredShortUrlReturns410AndIsNotCached() {
+            String code = create(Map.of("longUrl", uniqueUrl("gone"), "ttlSeconds", 60)).path("shortCode").asText();
+            expireNow(code);
+            try (Response response = get(code)) {
+                assertThat(response.getStatus()).isEqualTo(410);
+                assertThat(response.readEntity(JsonNode.class).path("code").asInt()).isEqualTo(410);
+            }
+            try (Jedis redis = Infrastructure.redis()) {
+                assertThat(redis.exists("url:" + code)).isFalse();
+            }
+        }
+
+        @Test
+        void sameUrlAfterExpiryGetsANewCode() {
+            String url = uniqueUrl("again");
+            String first = create(Map.of("longUrl", url, "ttlSeconds", 60)).path("shortCode").asText();
+            expireNow(first);
+            try (Response response = post(Map.of("longUrl", url))) {
+                assertThat(response.getStatus()).isEqualTo(201);
+                assertThat(response.readEntity(JsonNode.class).path("shortCode").asText()).isNotEqualTo(first);
+            }
         }
 
         @Test
@@ -263,13 +351,14 @@ class UrlShortenerE2EIT {
 
         @Test
         void redirectRespondsWithin200ms() {
-            String code = post(Map.of("longUrl", "https://example.com/fast"))
-                    .readEntity(JsonNode.class).path("shortCode").asText();
-            get(code).close(); // warm the cache
+            String code = create(Map.of("longUrl", uniqueUrl("fast"))).path("shortCode").asText();
+            get(code).close(); // warm up
             long start = System.nanoTime();
-            get(code).close();
-            long millis = (System.nanoTime() - start) / 1_000_000;
-            assertThat(millis).isLessThan(200);
+            try (Response response = get(code)) {
+                long millis = (System.nanoTime() - start) / 1_000_000;
+                assertThat(response.getStatus()).isEqualTo(302);
+                assertThat(millis).isLessThan(200);
+            }
         }
     }
 }
