@@ -1,0 +1,28 @@
+# Config for end-to-end tests. Database and Redis addresses are overridden with Testcontainers values.
+server:
+  applicationConnectors:
+    - type: http
+      port: 0
+  adminConnectors:
+    - type: http
+      port: 0
+
+database:
+  driverClass: com.mysql.cj.jdbc.Driver
+  url: jdbc:mysql://overridden/urlshortener
+  user: test
+  password: test
+
+redis:
+  host: overridden
+  port: 6379
+
+shortener:
+  baseUrl: http://localhost
+  hashAlgorithm: SHA-256
+  codeLength: 7
+  maxRehashAttempts: 5
+  aliasSuggestionCount: 3
+
+logging:
+  level: WARN
